@@ -1,5 +1,6 @@
 # Movie spec de demonstração — pixflow.movie/v1
-# Filme curto de 2 cenas a partir de imagens estáticas (parallax 2.5D + efeitos).
+# Reel de 5 cenas a partir de imagens estáticas (parallax 2.5D + efeitos), todas no mesmo
+# look (cinema-dramatico) para manter a identidade visual, variando câmera e transição.
 schema: pixflow.movie/v1
 
 meta:
@@ -7,7 +8,7 @@ meta:
   author: nmaldaner
 
 output:
-  resolution: 1280x720
+  resolution: 1920x1080
   fps: 30
   filename: demo.mp4
 
@@ -19,24 +20,65 @@ defaults:
 
 assets:
   images:
-    - id: cena1
-      file: assets/cena1.png
-      prompt: "epic mountain valley at golden hour, layered depth, atmospheric haze, cinematic"
-    - id: cena2
-      file: assets/cena2.png
-      prompt: "cold blue mountain lake at dawn, deep layers, fog, cinematic"
+    - id: cena3
+      file: assets/cena3.png
+      prompt: "alpine lake at golden hour, foreground foliage and rocks, hiker, layered depth, atmospheric haze, cinematic"
+    - id: cena4
+      file: assets/cena4.png
+      prompt: "cyberpunk city street at night, rain, neon, elevated train, foreground bokeh, layered depth, cinematic"
+    - id: cena5
+      file: assets/cena5.jpg
+      prompt: "ruined stone bridge under a cave arch, hiker crossing, distant cliffside castle, layered depth, cinematic"
+    - id: cena6
+      file: assets/cena6.jpg
+      prompt: "rainy night market alley, neon signs, street food stall foreground, crowd walking into the distance, layered depth, cinematic"
+    - id: cena7
+      file: assets/cena7.jpg
+      prompt: "sci-fi industrial ruins, soldier on a platform foreground, flying ship midground, sunburst through clouds, layered depth, cinematic"
 
 scenes:
+  # dolly curto (translação + zoom combinados) — deslocamento horizontal reduzido pra não
+  # expor as bordas mais incertas do depth map (ver notas no README/CLAUDE sobre fantasma 2.5D)
   - id: abertura
-    image: cena1
+    image: cena3
+    look: cinema-dramatico
+    duration: 4
+    camera: { type: dolly, intensity: 0.5, direction: right, easing: ease_in_out }
+    effects: { parallax: 0.38, grain: 0.02, chroma: 0.15 }
+    transition_out: { type: crossfade, duration: 0.6 }
+
+  # tracking curto (mesma lógica: metade do deslocamento horizontal original)
+  - id: revelacao
+    image: cena4
+    look: cinema-dramatico
+    duration: 4
+    camera: { type: tracking, intensity: 0.5, direction: left, easing: ease_in_out }
+    effects: { parallax: 0.38, grain: 0.02, chroma: 0.15 }
+    transition_out: { type: whip, duration: 0.4 }
+
+  # crane: movimento vertical (sobe revelando o castelo ao fundo) + leve roll — quase sem
+  # deslocamento horizontal por natureza do próprio movimento
+  - id: travessia
+    image: cena5
+    look: cinema-dramatico
+    duration: 4
+    camera: { type: crane, intensity: 1.0, easing: ease_in_out }
+    effects: { parallax: 0.3, grain: 0.02, chroma: 0.15 }
+    transition_out: { type: dip_to_black, duration: 0.5 }
+
+  # push_in: zoom puro (sem translação) — mergulha no corredor de neon do mercado
+  - id: mercado
+    image: cena6
     look: cinema-dramatico
     duration: 4
     camera: { type: push_in, intensity: 1.0, easing: ease_in_out }
-    transition_out: { type: crossfade, duration: 0.6 }
+    effects: { parallax: 0.3, grain: 0.02, chroma: 0.15 }
+    transition_out: { type: zoom_blur, duration: 0.45 }
 
-  - id: revelacao
-    image: cena2
-    look: sci-fi-cyberpunk
+  # pull_out: zoom reverso (sem translação) — revela a escala das ruínas e a nave
+  - id: ruinas
+    image: cena7
+    look: cinema-dramatico
     duration: 4
-    camera: { type: ken_burns, intensity: 1.2, direction: right, easing: ease_out }
-    duration_mode: flexible
+    camera: { type: pull_out, intensity: 1.0, easing: ease_in_out }
+    effects: { parallax: 0.3, grain: 0.02, chroma: 0.15 }

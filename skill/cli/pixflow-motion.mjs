@@ -58,10 +58,16 @@ function validate(spec, dir) {
 // ---------- render ----------
 async function ensureDepth(imgAbs, dir) {
   mkdirSync(CACHE, { recursive: true });
-  const depthAbs = join(CACHE, basename(imgAbs).replace(/\.\w+$/, '') + '_depth.png');
+  const base = basename(imgAbs).replace(/\.\w+$/, '');
+  const depthAbs = join(CACHE, base + '_depth.png');
   if (existsSync(depthAbs)) return depthAbs;
+  const rawAbs = join(CACHE, base + '_depth_raw.png');
   const { generateDepth } = await import('./depth.mjs');
-  await generateDepth(imgAbs, depthAbs);
+  await generateDepth(imgAbs, rawAbs);
+  // refina o depth cru contra a própria imagem (guided filter) — gruda as bordas do depth
+  // nas bordas reais da foto, matando o "fantasma" de contornos finos (galhos, folhas, cabelo)
+  const { guidedRefineDepth } = await import('./depthRefine.mjs');
+  await guidedRefineDepth(imgAbs, rawAbs, depthAbs);
   return depthAbs;
 }
 
@@ -120,7 +126,7 @@ async function render(specPath, outArg, opts) {
   else console.warn('  ⚠ nenhum Chromium encontrado; Remotion tentará baixar (pode falhar em aarch64). Defina PIXFLOW_CHROME.');
   if (opts.quality === 'fast') args.push('--jpeg-quality=80', '--concurrency=4');
   console.log('  • renderizando ->', out);
-  const r = spawnSync('npx', args, { cwd: SKILL, stdio: 'inherit', env: process.env });
+  const r = spawnSync('npx', args, { cwd: SKILL, stdio: 'inherit', env: process.env, shell: process.platform === 'win32' });
   if (r.status !== 0) {
     if (gl === 'angle') { console.warn('  ⚠ falhou com --gl=angle, tentando swangle…'); return render(specPath, outArg, { ...opts, gl: 'swangle' }); }
     process.exit(r.status || 1);
