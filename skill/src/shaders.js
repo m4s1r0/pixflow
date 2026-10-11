@@ -44,22 +44,71 @@ float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123
 
 vec3 sampleScene(vec2 uv) {
   // parallax 2.5D: depth ~1 = perto, ~0 = longe.
-  // anti-fantasma em 2 camadas:
-  //  (a) depth SUAVIZADO (5 taps) — transição perto→longe gradual não rasga o contorno;
-  //  (b) supressão CIENTE DE BORDA — onde o gradiente de profundidade é alto (contorno
-  //      do sujeito), o displacement cai ~85%; profundidade plena fica no céu/fundo/chão.
-  vec2 px = 3.0 / uResolution;
-  float dC = texture2D(uDepth, clamp(uv, 0.0, 1.0)).r;
-  float dR = texture2D(uDepth, clamp(uv + vec2(px.x, 0.0), 0.0, 1.0)).r;
-  float dL = texture2D(uDepth, clamp(uv - vec2(px.x, 0.0), 0.0, 1.0)).r;
-  float dU = texture2D(uDepth, clamp(uv + vec2(0.0, px.y), 0.0, 1.0)).r;
-  float dD = texture2D(uDepth, clamp(uv - vec2(0.0, px.y), 0.0, 1.0)).r;
-  float d = (dC * 2.0 + dR + dL + dU + dD) / 6.0;
-  float edge = clamp(length(vec2(dR - dL, dU - dD)) * 7.0, 0.0, 1.0);
-  float atten = 1.0 - edge * 0.85;
+  // anti-fantasma em 4 camadas:
+  //  (a) depth SUAVIZADO (9 taps, cruz+diagonais) — transição perto→longe gradual não rasga o contorno;
+  //  (b) supressão CIENTE DE BORDA, raio PROPORCIONAL ao parallax — com uParallax alto o
+  //      displacement viaja mais longe que o raio fixo de 3px enxergava, então uma transição
+  //      larga e suave (ex.: folhagem fora de foco/bokeh) não era detectada como "borda" e
+  //      o contorno ondulava/duplicava ("fantasma"). O raio agora cresce com uParallax para
+  //      sempre olhar pelo menos até onde o próprio displacement vai alcançar;
+  //  (c) supressão de ESTRUTURA FINA — galho, folhagem, cabelo: o depth (mesmo refinado por
+  //      guided filter) oscila muito em pouco espaço porque é silhueta fina sem informação
+  //      do que está atrás. Não dá pra "ocluir certo" uma estrutura de 1-2px com uma única
+  //      imagem — então, em vez de deslocar e esgarçar o contorno, detecta a ALTA VARIÂNCIA
+  //      LOCAL (raio fixo, pequeno) e desliga o parallax ali — estrutura fina fica estática;
+  //  (d) teto de segurança no displacement — rede de proteção final para depth ruidoso.
+  // medido em fotos reais: a transição perto->longe numa borda com fora-de-foco/bokeh
+  // se espalha por ~20-30px (não 3-6px) — o raio precisa alcançar pelo menos isso pra
+  // enxergar a queda inteira em vez de só uma fatia quase plana dela.
+  float lookAhead = clamp(uParallax * 40.0, 1.0, 20.0);
+  vec2 px = lookAhead * 3.0 / uResolution;
+  float dC  = texture2D(uDepth, clamp(uv, 0.0, 1.0)).r;
+  float dR  = texture2D(uDepth, clamp(uv + vec2(px.x, 0.0), 0.0, 1.0)).r;
+  float dL  = texture2D(uDepth, clamp(uv - vec2(px.x, 0.0), 0.0, 1.0)).r;
+  float dU  = texture2D(uDepth, clamp(uv + vec2(0.0, px.y), 0.0, 1.0)).r;
+  float dD  = texture2D(uDepth, clamp(uv - vec2(0.0, px.y), 0.0, 1.0)).r;
+  float dTR = texture2D(uDepth, clamp(uv + vec2(px.x, px.y), 0.0, 1.0)).r;
+  float dTL = texture2D(uDepth, clamp(uv + vec2(-px.x, px.y), 0.0, 1.0)).r;
+  float dBR = texture2D(uDepth, clamp(uv + vec2(px.x, -px.y), 0.0, 1.0)).r;
+  float dBL = texture2D(uDepth, clamp(uv + vec2(-px.x, -px.y), 0.0, 1.0)).r;
+  float d = (dC * 4.0 + (dR + dL + dU + dD) * 1.5 + dTR + dTL + dBR + dBL) / 14.0;
+  // borda axial (translação) + borda diagonal (cobre contornos fora dos eixos x/y)
+  float edgeAxis = length(vec2(dR - dL, dU - dD));
+  float edgeDiag = length(vec2(dTR - dBL, dTL - dBR));
+  float edge = clamp(max(edgeAxis, edgeDiag) * 7.0, 0.0, 1.0);
+
+  // variância local em raio FIXO e pequeno (independe do parallax) — mede "quão picotado"
+  // o depth está logo ao redor do pixel. Edge (acima) pergunta "há UMA borda daqui até o
+  // alcance do displacement?"; variância pergunta "isso aqui é silhueta fina oscilando?".
+  vec2 fpx = 2.0 / uResolution;
+  float fR = texture2D(uDepth, clamp(uv + vec2(fpx.x, 0.0), 0.0, 1.0)).r;
+  float fL = texture2D(uDepth, clamp(uv - vec2(fpx.x, 0.0), 0.0, 1.0)).r;
+  float fU = texture2D(uDepth, clamp(uv + vec2(0.0, fpx.y), 0.0, 1.0)).r;
+  float fD = texture2D(uDepth, clamp(uv - vec2(0.0, fpx.y), 0.0, 1.0)).r;
+  float fMean = (dC + fR + fL + fU + fD) / 5.0;
+  float variance = ((dC - fMean) * (dC - fMean) + (fR - fMean) * (fR - fMean)
+                   + (fL - fMean) * (fL - fMean) + (fU - fMean) * (fU - fMean)
+                   + (fD - fMean) * (fD - fMean)) / 5.0;
+  float filigree = clamp(variance * 55.0, 0.0, 1.0);
+
+  // mesma ideia, mas no raio LARGO (lookAhead): pega oscilação que só aparece numa janela
+  // maior que a da silhueta fina — ex. nuvem atravessada por raio de sol, onde o depth
+  // "pisca" entre perto/longe a cada 20-40px porque o modelo não resolve luz através de
+  // névoa/nuvem. Reusa os 9 taps já amostrados pra d/edge, sem custo extra de textura.
+  float wMean = d;
+  float wVar = ((dC - wMean) * (dC - wMean) + (dR - wMean) * (dR - wMean) + (dL - wMean) * (dL - wMean)
+              + (dU - wMean) * (dU - wMean) + (dD - wMean) * (dD - wMean)
+              + (dTR - wMean) * (dTR - wMean) + (dTL - wMean) * (dTL - wMean)
+              + (dBR - wMean) * (dBR - wMean) + (dBL - wMean) * (dBL - wMean)) / 9.0;
+  float wideFiligree = clamp(wVar * 32.0, 0.0, 1.0);
+
+  float atten = (1.0 - edge * 0.95) * (1.0 - filigree * 0.92) * (1.0 - wideFiligree * 0.95);
   // diferencial da translação (perto desloca mais) + diferencial do zoom (dolly em profundidade)
   // diferenciais contidos: acima de ~0.7 a borda de profundidade duplica o contorno ("fantasma")
   vec2 disp = (uOffset * 0.7 + (uv - 0.5) * (uZoom - 1.0) * 0.5) * uParallax * (d - 0.5) * atten;
+  // teto de segurança: mesmo com parallax alto + depth instável, nunca desloca mais que ~3% do quadro
+  float dispLen = length(disp);
+  if (dispLen > 0.03) disp *= 0.03 / dispLen;
   vec2 suv = clamp(uv + disp, 0.0, 1.0);
 
   // aberração cromática proporcional ao movimento
